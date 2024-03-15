@@ -1,0 +1,50 @@
+---
+title: "data proc"
+output: html_document
+date: "2023-09-26"
+---
+
+# Packages
+```{r}
+library(sf)
+library(tidyverse)
+library(see)
+library(naniar)
+```
+
+# Combine coordinate and landscape data
+
+Why does `hectares` sometimes but not always match `focal_patch_size`?
+```{r}
+landscape <- read_delim("../data/raw/gis/11960_WP2 habitat amount i_1.2.2/11960.txt") %>%
+  select(site = SiteID,
+         grassland_percent = HabitatPercent,
+         focal_patch_size = PatchSize) %>%
+  # convert to hectares
+  mutate(focal_patch_size = focal_patch_size/10000)
+
+geospatial <- read_delim("../data/raw/gis/10500_Safeguard study site_1.7.3/10500.txt",
+                         delim = "\t") %>%
+  select(site = SiteID,
+         country = Country,
+         lat = Lat,
+         lon = Lon,
+         hectares = Size_in_ha,
+         elevation = Elevation,
+         habitat = Habitat,
+         protection = Protected_level
+         ) %>%
+  filter(country != "Netherlands") %>%
+  inner_join(landscape) %>%
+  replace_with_na_all(condition = ~.x == -999999) %>%
+  st_as_sf(coords = c("lon", "lat")) %>%
+  group_by(country) %>%
+  mutate(grassland_percent_mean = mean(grassland_percent)) %>%
+  mutate(focal_patch_size_mean = mean(focal_patch_size)) %>%
+  mutate(country = str_replace(country, "UK", "United Kingdom"))
+
+write_rds(geospatial, "../data/processed/geospatial.rds")
+
+coords <- read_delim("../data/raw/gis/10500_Safeguard study site_1.7.3/10500.txt",
+                         delim = "\t") 
+```

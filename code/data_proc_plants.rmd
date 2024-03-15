@@ -1,0 +1,749 @@
+---
+title: "data proc"
+output: html_document
+---
+
+# Packages
+```{r}
+library(taxize)
+library(taxonomizr)
+library(tidyverse)
+library(janitor)
+library(see)
+```
+
+# Custom functions
+```{r}
+# For data sets with single name in plant_species
+prep_plants1 <- function(x, country) {
+  
+  country = enquo(country)
+  
+  x %>%
+    # rename site
+    rename(site = SiteID) %>%
+    # make proper date field
+    mutate(date = str_extract(date, "^.{10}"),
+           date = dmy(date)) %>%
+    # prepare name for taxize input
+    mutate(user_supplied_name = if_else(
+      !is.na(plant_species),
+      paste(plant_genus, plant_species, sep = " "),
+      plant_genus) 
+    ) %>%
+    # remove stray white space
+    mutate(user_supplied_name = str_squish(user_supplied_name)) %>%
+    # add country name
+    mutate(country = !!country)
+}
+
+# For data sets with full binomial in plant_species
+prep_plants2 <- function(x, country) {
+  
+  country = enquo(country)
+  
+  x %>%
+    # rename site
+    rename(site = SiteID) %>%
+    # make proper date field
+    mutate(date = str_extract(date, "^.{10}"),
+           date = dmy(date)) %>%
+    # prepare name for taxize input
+    separate(plant_species, c("genus", "species"), remove = FALSE) %>%
+    mutate(user_supplied_name = if_else(
+      !is.na(plant_species),
+      paste(genus, species, sep = " "),
+      plant_genus) 
+    ) %>%
+    # remove stray white space
+    mutate(user_supplied_name = str_squish(user_supplied_name)) %>%
+    # add country name
+    mutate(country = !!country)
+}
+
+# Taxonomy check
+check_tax <- function(x) {
+  
+  # Extract unique taxa
+  taxa <- x %>%
+    select(user_supplied_name) %>%
+    distinct()
+  
+  # match to taxize databases
+  gnr_resolve(taxa$user_supplied_name, 
+              data_source_ids = c(197), # Kew World Checklist of Vascular Plants 
+              canonical = TRUE) %>%
+    select(user_supplied_name, 
+           submitted_name, 
+           score, 
+           matched_name = matched_name2) %>%
+    distinct()
+  
+}
+
+# 4 # NCBI
+# 11 # GBIF
+# 196 # WFO
+# 197 # WCVP
+```
+
+
+# Load individual data sets
+## Belgium
+```{r}
+# Initial prep
+belgium_plants.in <- read_delim("../data/raw/belgium/11200_Task_2.3_Plant_Datas_1.1.0/11200.txt",
+                                delim = "\t") %>%
+  prep_plants1(country = "Belgium")
+
+# Check using taxize
+belgium_plant_tax_check <- check_tax(belgium_plants.in)
+
+# Make any necessary corrections (check all matches < 98%) 
+belgium_plant_tax.final <- belgium_plant_tax_check %>%
+  # manual corrections
+  mutate(final_name = case_when(
+    user_supplied_name == "Taraxacum officinalis" ~ "Taraxacum officinale",
+    user_supplied_name == "Melilotus alba" ~ "Melilotus albus",
+    user_supplied_name == "Potentille argentea" ~ "Potentilla argentea",
+    user_supplied_name == "Urtica dio?ca" ~ "Urtica dioica",
+    user_supplied_name == "Dianthus delto?des" ~ "Dianthus deltoides",
+    user_supplied_name == "Veronica chamaedrys." ~ "Veronica chamaedrys",
+    .default = matched_name
+  )) %>%
+  distinct() 
+
+# Join back into the original table and make any final corrections
+belgium_plants.out <- belgium_plants.in %>%
+  left_join(belgium_plant_tax.final) %>%
+  select(country, region, site, date, transect_type, transect_round, 
+         user_supplied_name, submitted_name, matched_name,final_name, 
+         flower_cover_percent, total_flower_cover) %>%
+  # final corrections
+  mutate(final_name = case_when(
+    user_supplied_name == "Millepertuis perfor?" ~ NA,
+    user_supplied_name == "Verbasum" ~ "Verbascum",
+    user_supplied_name == "Surbus sp" ~ "Sorbus",
+    user_supplied_name == "Ranunculus ficaria" ~ "Ficaria verna", # update name
+    user_supplied_name == "Laburnum vulgare" ~ "Laburnum anagyroides", # update name
+    user_supplied_name == "Lychnis" ~ "Silene", # update name
+    user_supplied_name == "Lychnis flos-cuculi" ~ "Silene flos-cuculi", # update name
+    .default = final_name
+  ))
+  
+```
+
+## Estonia
+```{r}
+# Initial prep
+estonia_plants.in <- read_delim("../data/raw/estonia/11140_WP2_3_FieldData_Plan_1.3.0/11140.txt",
+                                delim = "\t") %>%
+  prep_plants2(country = "Estonia") 
+
+# Check using taxize
+estonia_plant_tax_check <- check_tax(estonia_plants.in)
+
+# Make any necessary corrections (check all matches < 98%) 
+estonia_plant_tax.final <- estonia_plant_tax_check %>%
+  # manual corrections
+  mutate(final_name = case_when(
+    user_supplied_name == "Odontites verna" ~ "Odontites vernus",
+    .default = matched_name
+  )) %>%
+  distinct() 
+
+# Join back into the original table
+estonia_plants.out <- estonia_plants.in %>%
+  left_join(estonia_plant_tax.final) %>%
+  select(country, region, site, date, transect_type, transect_round, 
+         user_supplied_name, submitted_name, matched_name,final_name, 
+         flower_cover_percent, total_flower_cover) %>%
+  # special actions
+  mutate(
+    region = case_when(
+      region == 1 ~ "EST1",
+      region == 2 ~ "EST2",
+      region == 3 ~ "EST3",
+      region == 4 ~ "EST4")) %>%
+  # final corrections
+  mutate(final_name = case_when(
+    user_supplied_name == "Orchidaceae sp" ~ "Orchidaceae",
+    user_supplied_name == "Lychnis flos" ~ "Silene flos-cuculi",
+    user_supplied_name == "Myosotis laxa" ~ "Myosotis laxa",
+    user_supplied_name == "Tetragonolobus maritimus" ~ "Lotus maritimus",
+    .default = final_name
+  ))
+```
+
+## France
+```{r}
+france_plants.in <- read_delim("../data/raw/france/11820_WP2_FieldData_Plants_2.1.2/11820.txt",
+                                     delim = "\t") %>%
+  prep_plants2(country = "France")
+  
+
+# Check using taxize
+france_plant_tax_check <- check_tax(france_plants.in)
+
+# Make any necessary corrections (check all matches < 98%) 
+france_plant_tax.final <- france_plant_tax_check %>%
+  # manual corrections
+  mutate(final_name = case_when(
+    user_supplied_name == "Cerastium pumillum" ~ "Cerastium pumilum",
+    .default = matched_name
+  )) %>%
+  distinct() 
+
+# Join back into the original table
+france_plants.out <- france_plants.in %>%
+  left_join(france_plant_tax.final) %>%
+  select(country, region, site, date, transect_type, transect_round, 
+         user_supplied_name, submitted_name, matched_name,final_name, 
+         flower_cover_percent, total_flower_cover) %>%
+  mutate(total_flower_cover = as.numeric(total_flower_cover)) %>%
+  # final corrections
+  mutate(final_name = case_when(
+    user_supplied_name == "Fabaceae" ~ "Fabaceae",
+    .default = final_name
+  ))
+```
+
+## Germany (east)
+```{r}
+germany_east_plants.in <- read_delim("../data/raw/germany_east/12000_WP2.3_FieldData_Plan_1.2.2/12000.txt",
+                                     delim = "\t") %>%
+  prep_plants1(country = "Germany")
+
+# Check using taxize
+germany_east_plant_tax_check <- check_tax(germany_east_plants.in)
+
+# Make any necessary corrections (check all matches < 98%) 
+germany_east_plant_tax.final <- germany_east_plant_tax_check %>%
+  # first deal with typos and such
+  mutate(final_name = case_when(
+    user_supplied_name == "Geranium colbinum" ~ "Geranium columbinum",
+    user_supplied_name == "Anthemis eupatoria" ~ "Agrimonia eupatoria",
+    user_supplied_name == "Echinops carthusianorum" ~ "Echinops sphaerocephalus",
+    .default = matched_name
+  )) %>%
+  distinct() 
+
+# Join back into the original table
+germany_east_plants.out <- germany_east_plants.in %>%
+  left_join(germany_east_plant_tax.final) %>%
+  select(country, region, site, date, transect_type, transect_round, 
+         user_supplied_name, submitted_name, matched_name,final_name, 
+         flower_cover_percent = flower_cover_percent_species, 
+         total_flower_cover = total_flower_cover_transect) %>%
+  # final corrections
+  mutate(final_name = case_when(
+    user_supplied_name == "Drunella grandifolia" ~ "Prunella grandifolia",
+    user_supplied_name == "Cycopsis arvensis" ~ "Anchusa arvensis",
+    .default = final_name
+  ))
+```
+
+## Germany (west)
+```{r}
+germany_west_plants.in <- read_delim("../data/raw/germany_west/11340_WP2_FieldData_Plants_1.2.4/11340.txt",
+                                     delim = "\t") %>%
+  prep_plants1(country = "Germany")
+
+# Check using taxize
+germany_west_plant_tax_check <- check_tax(germany_west_plants.in)
+  
+# Make any necessary corrections (check all matches < 98%) 
+germany_west_plant_tax.final <- germany_west_plant_tax_check %>%
+  # first deal with typos and such
+  mutate(final_name = case_when(
+    user_supplied_name == "Taraxacum officinales" ~ "Taraxacum officinale",
+    user_supplied_name == "Salvia pratense" ~ "Salvia pratensis",
+    user_supplied_name == "Crataegus monogyna/laevigata" ~ "Crataegus",
+    user_supplied_name == "Taraxacum officinalis" ~ "Taraxacum officinale",
+    user_supplied_name == "Alium sphaerocephalon" ~ "Allium sphaerocephalon",
+    user_supplied_name == "Anthemis eupatoria" ~ NA, # check with Carolin
+    user_supplied_name == "Seseli libanotes" ~ "Seseli libanotis",
+    user_supplied_name == "Echinops cartusianorum" ~ NA, # check with Carolin
+    user_supplied_name == "Echinops rito" ~ "Echinops ritro",
+    user_supplied_name == "Campanula rapuncoloides" ~ "Campanula rapunculoides",
+    .default = matched_name
+  )) %>%
+  distinct() 
+
+# Join back into the original table
+germany_west_plants.out <- germany_west_plants.in %>%
+  left_join(germany_west_plant_tax.final) %>%
+  select(country, region, site, date, transect_type, transect_round, 
+         user_supplied_name, submitted_name, matched_name, final_name, 
+         flower_cover_percent = flower_cover_percent_species, 
+         total_flower_cover = total_flower_cover_transect) %>%
+  # final corrections
+  mutate(final_name = case_when(
+    user_supplied_name == "Brassicaceae" ~ "Brassicaceae",
+    user_supplied_name == "Asteraceae" ~ "Asteraceae",
+    user_supplied_name == "Sativa pratensis" ~ "Salvia pratensis",
+    user_supplied_name == "Apiaceae" ~ "Apiaceae",
+    user_supplied_name == "Hiarcium pilosella" ~ "Hieracium pilosella",
+    user_supplied_name == "Melitolus officinalis" ~ "Melilotus officinalis",
+    .default = final_name
+  ))
+```
+
+## Hungary
+```{r}
+hungary_plants.in <- read_delim("../data/raw/hungary/11280_WP2_3_field_data_Hun_1.1.3/11280.txt",
+                                     delim = "\t") %>%
+  prep_plants1(country = "Hungary")
+
+# Check using taxize
+hungary_plant_tax_check <- check_tax(hungary_plants.in)
+  
+# Make any necessary corrections (check all matches < 98%) 
+hungary_plant_tax.final <- hungary_plant_tax_check %>%
+  # first deal with typos and such
+  mutate(submitted_name = str_replace_all(submitted_name, "sp\\.", "NA")) %>%
+  mutate(final_name = case_when(
+    user_supplied_name == "Pentanema britannicum" ~ "Pentanema britannica",
+    user_supplied_name == "Echinops ritro subsp. ruthenicus" ~ "Echinops ritro",
+    user_supplied_name == "Jacobaea erucifolia subsp. erucifolia" ~ "Jacobaea erucifolia",
+    user_supplied_name == "Jacobaea vulgaris subsp. vulgaris" ~ "Jacobaea vulgaris",
+    user_supplied_name == "Vicia sativa subsp. nigra" ~ "Vicia sativa",
+    .default = matched_name
+  )) %>%
+  distinct() 
+
+# Join back into the original table
+hungary_plants.out <- hungary_plants.in %>%
+  left_join(hungary_plant_tax.final) %>%
+  select(country, region, site, date, transect_type, transect_round, 
+         user_supplied_name, submitted_name, matched_name,final_name, 
+         flower_cover_percent, total_flower_cover)
+```
+
+## Italy
+```{r}
+italy_plants.in <- read_delim("../data/raw/italy/11040_UNIPD_task_2.3_plant_1.1.2/11040.txt",
+                                     delim = "\t") %>%
+  prep_plants2(country = "Italy")
+
+# Check using taxize
+italy_plant_tax_check <- check_tax(italy_plants.in)
+
+# Make any necessary corrections (check all matches < 98%) 
+italy_plant_tax.final <- italy_plant_tax_check %>%
+  # first deal with typos and such
+  mutate(final_name = case_when(
+    user_supplied_name == "Paliurus spina" ~ "Paliurus spina-christi",
+    .default = matched_name
+  )) %>%
+  distinct() 
+
+# Join back into the original table
+italy_plants.out <- italy_plants.in %>%
+  left_join(italy_plant_tax.final) %>%
+  select(country, region, site, date, transect_type, transect_round, 
+         user_supplied_name, submitted_name, matched_name,final_name, 
+         flower_cover_percent, total_flower_cover) %>%
+  # final corrections
+  mutate(final_name = case_when(
+    user_supplied_name == "Lychnis flos" ~ "Silene flos-cuculi", # update name
+    .default = final_name
+  ))
+  
+  
+  
+```
+
+## Romania
+```{r}
+romania_plants.in <- read_delim("../data/raw/romania/11580_Plants_T2.3_Romania_1.3.1/11580.txt",
+                                     delim = "\t") %>%
+  prep_plants1(country = "Romania")
+
+# Check using taxize
+romania_plant_tax_check <- check_tax(romania_plants.in)
+
+# Make any necessary corrections (check all matches < 98%) 
+romania_plant_tax.final <- romania_plant_tax_check %>%
+  # no corrections
+  mutate(final_name = case_when(
+    user_supplied_name == "blank" ~ "blank",
+    .default = matched_name
+  )) %>%
+  distinct() 
+
+# Join back into the original table
+romania_plants.out <- romania_plants.in %>%
+  left_join(romania_plant_tax.final) %>%
+  select(country, region, site, date, transect_type, transect_round, 
+         user_supplied_name, submitted_name, matched_name,final_name, 
+         flower_cover_percent, total_flower_cover) %>%
+  # final corrections
+  mutate(final_name = case_when(
+    user_supplied_name == "Clematita integrifolia" ~ "Clematis integrifolia",
+    user_supplied_name == "Lychnis flos-cuculi" ~ "Silene flos-cuculi", # update name
+    .default = matched_name
+  ))
+```
+
+## Serbia
+```{r}
+serbia_plants.in <- read_delim("../data/raw/serbia/11080_Field_data_task_2.3__1.1.2/11080.txt",
+                                     delim = "\t") %>%
+  prep_plants1(country = "Serbia")
+  
+# Check using taxize
+serbia_plant_tax_check <- check_tax(serbia_plants.in)
+
+# Make any necessary corrections (check all matches < 98%) 
+serbia_plant_tax.final <- serbia_plant_tax_check %>%
+  mutate(submitted_name = str_replace_all(submitted_name, "sp\\.", "NA")) %>%
+  mutate(final_name = case_when(
+    user_supplied_name == "blank" ~ "blank",
+    .default = matched_name
+  )) %>%
+  distinct() 
+
+# Join back into the original table
+serbia_plants.out <- serbia_plants.in %>%
+  left_join(serbia_plant_tax.final) %>%
+  select(country, region, site, date, transect_type, transect_round, 
+         user_supplied_name, submitted_name, matched_name,final_name, 
+         flower_cover_percent, total_flower_cover) %>%
+  # final corrections
+  mutate(final_name = case_when(
+    user_supplied_name == "Citysus austriacus" ~ "Chamaecytisus austriacus",
+    .default = matched_name
+  ))
+```
+
+## Spain
+```{r}
+spain_plants.in <- read_delim("../data/raw/spain/11680_WP2_FieldData_Plants_1.1.0/11680.txt",
+                                     delim = "\t") %>%
+  prep_plants1(country = "Spain")
+
+# Check using taxize
+spain_plant_tax_check <- check_tax(spain_plants.in)
+
+# Make any necessary corrections (check all matches < 98%) 
+spain_plant_tax.final <- spain_plant_tax_check %>%
+  mutate(submitted_name = str_replace_all(submitted_name, " sp$", " NA")) %>%
+  # first deal with typos and such
+  mutate(final_name = case_when(
+    user_supplied_name == "Scorpiurus muricatus+k400" ~ "Scorpiurus muricatus",
+    .default = matched_name
+  )) %>%
+  distinct() 
+
+# Join back into the original table
+spain_plants.out <- spain_plants.in %>%
+  left_join(spain_plant_tax.final) %>%
+  select(country, region, site, date, transect_type, transect_round, 
+         user_supplied_name, submitted_name, matched_name,final_name, 
+         flower_cover_percent, total_flower_cover) %>%
+  # final corrections
+  mutate(final_name = case_when(
+    user_supplied_name == "Ornito gallum" ~ "Ornithogalum",
+    user_supplied_name == "Palleris spniosa" ~ "Pallenis spinosa",
+    user_supplied_name == "Anthillys sp" ~ "Anthyllis",
+    user_supplied_name == "Lathyrus clymenun" ~ "Lathyrus clymenus",
+    .default = matched_name
+  ))
+```
+
+## Sweden
+```{r}
+sweden_plants.in <- read_delim("../data/raw/sweden/11500_WP_FieldData_Plants__1.1.0/11500.txt",
+                                     delim = "\t") %>%
+  prep_plants1(country = "Sweden")
+  
+# Check using taxize
+sweden_plant_tax_check <- check_tax(sweden_plants.in)
+
+# Make any necessary corrections (check all matches < 98%) 
+sweden_plant_tax.final <- sweden_plant_tax_check %>%
+  # first deal with typos and such
+  mutate(final_name = case_when(
+    user_supplied_name == "Anemone unidentified" ~ "Anemone",
+    user_supplied_name == "Galium unidentified" ~ "Galium",
+    user_supplied_name == "Chamaenerion ciliatum" ~ "Epilobium ciliatum",
+    .default = matched_name
+  )) %>%
+  distinct() 
+
+# Join back into the original table
+sweden_plants.out <- sweden_plants.in %>%
+  left_join(sweden_plant_tax.final) %>%
+  select(country, region, site, date, transect_type, transect_round, 
+         user_supplied_name, submitted_name, matched_name,final_name, 
+         flower_cover_percent, total_flower_cover) %>%
+  # final corrections
+  mutate(final_name = case_when(
+    user_supplied_name == "Lychnis" ~ "Silene", # update name
+    user_supplied_name == "Lychnis flos-cuculi" ~ "Silene flos-cuculi", # update name
+    .default = final_name
+  ))
+```
+
+## Switzerland
+```{r}
+switzerland_plants.in <- read_delim("../data/raw/switzerland/11460_WP2_FieldData_Plants_1.1.2/11460.txt",
+                                     delim = "\t") %>%
+  prep_plants1(country = "Switzerland")
+  
+# Check using taxize
+switzerland_plant_tax_check <- check_tax(switzerland_plants.in)  
+
+# Make any necessary corrections (check all matches < 98%) 
+switzerland_plant_tax.final <- switzerland_plant_tax_check %>%
+  # first deal with typos and such
+  mutate(final_name = case_when(
+    user_supplied_name == "blank" ~ "blank",
+    .default = matched_name
+  )) %>%
+  distinct() 
+
+# Join back into the original table
+switzerland_plants.out <- switzerland_plants.in %>%
+  left_join(switzerland_plant_tax.final) %>%
+  select(country, region, site, date, transect_type, transect_round, 
+         user_supplied_name, submitted_name, matched_name,final_name, 
+         flower_cover_percent, total_flower_cover)
+```
+
+## UK
+```{r}
+# Read and prep
+uk_plants.in <- read_csv("../data/raw/uk/wp2.3_plants_uk.csv") %>%
+  prep_plants1(country = "United Kingdom")
+
+# Check against taxize databases
+uk_plant_tax_check <- check_tax(uk_plants.in)
+  
+# Make any necessary corrections (check all matches < 98%) 
+uk_plant_tax.final <- uk_plant_tax_check %>%
+  # manual fixes
+  mutate(final_name = case_when(
+    user_supplied_name == "Anthriscus sylvestris sylvestris" ~ "Anthriscus sylvestris",
+    .default = matched_name
+  )) %>%
+  distinct() 
+
+# Join back into the original table
+uk_plants.out <- uk_plants.in %>%
+  left_join(uk_plant_tax.final) %>%
+  select(country, region = county, site, date, transect_type, transect_round, 
+         user_supplied_name, submitted_name, matched_name, final_name, 
+         flower_cover_percent = flower_cover_percentage,
+         total_flower_cover)
+```
+
+# Inspect
+```{r}
+comparison <- compare_df_cols(belgium_plants.in, 
+                estonia_plants.in,
+                france_plants.in,
+                germany_east_plants.in,
+                germany_west_plants.in,
+                hungary_plants.in,
+                italy_plants.in,
+                romania_plants.in,
+                serbia_plants.in,
+                spain_plants.in,
+                sweden_plants.in,
+                uk_plants.in,
+                switzerland_plants.in)
+```
+
+# Combine
+```{r}
+plants_join <- bind_rows(belgium_plants.out,
+                              estonia_plants.out,
+                              france_plants.out,
+                              germany_east_plants.out,
+                              germany_west_plants.out,
+                              hungary_plants.out,
+                              italy_plants.out,
+                              romania_plants.out,
+                              serbia_plants.out,
+                              spain_plants.out,
+                              sweden_plants.out,
+                              uk_plants.out,
+                              switzerland_plants.out) 
+ 
+```
+
+# Add higher taxonomy
+```{r}
+plants_final <- plants_join %>%
+  mutate(taxon_id = getId(final_name,
+                          sqlFile = "nameNode.sqlite"),
+         order = getTaxonomy(taxon_id,
+                             desiredTaxa = c("order"),
+                             sqlFile = "nameNode.sqlite") %>% c(),
+         family = getTaxonomy(taxon_id,
+                             desiredTaxa = c("family"),
+                             sqlFile = "nameNode.sqlite") %>% c(),
+         genus = getTaxonomy(taxon_id,
+                             desiredTaxa = c("genus"),
+                             sqlFile = "nameNode.sqlite") %>% c(),
+         species = getTaxonomy(taxon_id,
+                             desiredTaxa = c("species"),
+                             sqlFile = "nameNode.sqlite") %>% c()) %>%
+  # filter out lines without user supplied name
+  filter(!is.na(user_supplied_name)) %>%
+  # manually complete taxa that didn't match the NCBI database
+  mutate(genus = case_when(
+    final_name == "Acinos arvensis" ~ "Acinos",
+    final_name == "Acinos vulgaris" ~ "Acinos",
+    final_name == "Ajuga  reptans" ~ "Ajuga",
+    final_name == "Ajuga laxmannii" ~ "Ajuga",
+    final_name == "Anchusa calcarea" ~ "Anchusa",
+    final_name == "Anisantha sterilis" ~ "Anisantha",
+    final_name == "Anthriscus arvensis" ~ "Anthriscus",
+    final_name == "Anthemis tinctoria" ~ "Anthemis",
+    final_name == "Aphanes arvensis" ~ "Aphanes",
+    final_name == "Arabis arenosa" ~ "Arabis",
+    final_name == "Arenaria" ~ "Arenaria",
+    final_name == "Argentina anserina" ~ "Argentina",
+    final_name == "Asperula odorata" ~ "Asperula",
+    final_name == "Bromopsis erecta" ~ "Bromopsis",
+    final_name == "Buglossoides purpurocaerulea" ~ "Buglossoides",
+    final_name == "Capsella bursa" ~ "Capsella",
+    final_name == "Cerinthe gymnandra" ~ "Cerinthe",
+    final_name == "Chamaecytisus albus" ~ "Chamaecytisus",
+    final_name == "Chamaecytisus austriacus" ~ "Chamaecytisus",
+    final_name == "Chamerion angustifolium" ~ "Chamerion",
+    final_name == "Chamomilla" ~ "Chamomilla",
+    final_name == "Cirsium eriophorum" ~ "Cirsium",
+    final_name == "Convolvulus cantabrica" ~ "Convolvulus",
+    final_name == "Coronilla varia" ~ "Coronilla",
+    final_name == "Lycopsis arvensis" ~ "Lycopsis",
+    final_name == "Delphinium consolida" ~ "Delphinium",
+    final_name == "Dianthus saxicola" ~ "Dianthus",
+    final_name == "Diplotaxis" ~ "Diplotaxis",
+    final_name == "Dorycnium gracile" ~ "Dorycnium",
+    final_name == "Dorycnium herbaceum" ~ "Dorycnium",
+    final_name == "Echinops" ~ "Echinops",
+    final_name == "Echinops ritro" ~ "Echinops",
+    final_name == "Epilobium angustifolium" ~ "Epilobium",
+    final_name == "Erica" ~ "Erica",
+    final_name == "Erodium primulaceum" ~ "Erodium",
+    final_name == "Filipendula hexapetala" ~ "Filipendula",
+    final_name == "Foeniculum vulgare" ~ "Foeniculum",
+    final_name == "Galactites tomentosus" ~ "Galactites",
+    final_name == "Halimium calycinum" ~ "Halimium",
+    final_name == "Helianthemum vulgare" ~ "Helianthemum",
+    final_name == "Hieracium pilosella" ~ "Hieracium",
+    final_name == "Inula conyzae" ~ "Inula",
+    final_name == "Inula montana" ~ "Inula",
+    final_name == "Iris" ~ "Iris",
+    final_name == "Lathyros clymenus" ~ "Lathyros",
+    final_name == "Leontodon asper" ~ "Leontodon",
+    final_name == "Leontodon autumnalis" ~ "Leontodon",
+    final_name == "Leopoldia comosa" ~ "Leopoldia",
+    final_name == "Linaria" ~ "Linaria",
+    final_name == "Lithospermum purpurocaeruleum" ~ "Lithospermum",
+    final_name == "Lychnis flos-cuculi" ~ "Lychnis",
+    final_name == "Lysimachia arvensis" ~ "Lysimachia",
+    final_name == "Mahonia aquifolium" ~ "Mahonia",
+    final_name == "Malcolmia lacera" ~ "Malcolmia",
+    final_name == "Malva setigera" ~ "Malva",
+    final_name == "Malva thuringiaca" ~ "Malva",
+    final_name == "Medicago falcata" ~ "Medicago",
+    final_name == "Melilotus alba" ~ "Melilotus",
+    final_name == "Noccaea montana" ~ "Noccaea",
+    final_name == "Nonea erecta" ~ "Nonea",
+    final_name == "Ononis repens" ~ "Ononis",
+    final_name == "Ophrys fuciflora" ~ "Ophrys",
+    final_name == "Ophrys holoserica" ~ "Ophrys",
+    final_name == "Orchis morio" ~ "Orchis",
+    final_name == "Orchis ustulata" ~ "Orchis",
+    final_name == "Ornithogalum divergens" ~ "Ornithogalum",
+    final_name == "Ornithogalum nutans" ~ "Ornithogalum",
+    final_name == "Ornithogalum pyramidale" ~ "Ornithogalum",
+    final_name == "Orobanche uniflora" ~ "Orobanche",
+    final_name == "Pastinaca sylvestris" ~ "Pastinaca",
+    final_name == "Pentanema britannica" ~ "Pentanema",
+    final_name == "Pentanema hirtum" ~ "Pentanema",
+    final_name == "Pentanema salicinum" ~ "Pentanema",
+    final_name == "Plantago viridis" ~ "Plantago",
+    final_name == "Potentilla arenaria" ~ "Potentilla",
+    final_name == "Potentilla neumanniana" ~ "Potentilla",
+    final_name == "Potentilla repens" ~ "Potentilla",
+    final_name == "Poterium sanguisorba" ~ "Poterium",
+    final_name == "Primula officinalis" ~ "Primula",
+    final_name == "Prunella grandifolia" ~ "Prunella",
+    final_name == "Prunella" ~ "Prunella",
+    final_name == "Ranunculus lacer" ~ "Ranunculus",
+    final_name == "Rhamnus frangula" ~ "Rhamnus",
+    final_name == "Robinia pseudacacia" ~ "Robinia",
+    final_name == "Rorippa kerneri" ~ "Rorippa",
+    final_name == "Rubus fruticosus" ~ "Rubus",
+    final_name == "Scabiosa arvensis" ~ "Scabiosa",
+    final_name == "Scabiosa succisa" ~ "Scabiosa",
+    final_name == "Scabiosa vulgaris" ~ "Scabiosa",
+    final_name == "Senecio aquaticus" ~ "Senecio",
+    final_name == "Senecio erraticus" ~ "Senecio",
+    final_name == "Senecio erucifolius" ~ "Senecio",
+    final_name == "Senecio fuchsii" ~ "Senecio",
+    final_name == "Senecio jacobaea" ~ "Senecio",
+    final_name == "Silene alba" ~ "Silene",
+    final_name == "Silene latifolia alba" ~ "Silene",
+    final_name == "Sorbus intermedia" ~ "Sorbus",
+    final_name == "Stachys officinalis" ~ "Stachys",
+    final_name == "Stellaria" ~ "Stellaria",
+    final_name == "Tetragonolobus maritimus" ~ "Tetragonolobus",
+    final_name == "Thlaspi kovatsii" ~ "Thlaspi",
+    final_name == "Thlaspi perfoliatum" ~ "Thlaspi",
+    final_name == "Thymus chamaedrys" ~ "Thymus",
+    final_name == "Tripleurospermum perforatum" ~ "Tripleurospermum",
+    final_name == "Valerianella carinata" ~ "Valerianella",
+    final_name == "Valeriana locusta" ~ "Valeriana",
+    final_name == "Vicia angustifolia" ~ "Vicia",
+    final_name == "Vinca herbacea" ~ "Vinca",
+    final_name == "Viola" ~ "Viola",
+    final_name == "Viola campestris" ~ "Viola",
+    .default = genus)) %>%
+  # fill some of the missing higher levels by grouping by genus and calling fill()
+  group_by(genus) %>%
+  fill(c(order, family), .direction = "downup") %>%
+  # finish the families manually; assigned based on manual GBIF search
+  mutate(family = case_when(
+    genus == "Acinos" ~ "Lamiaceae",
+    genus == "Anisantha" ~ "Poaeceae",
+    genus == "Aphanes" ~ "Rosaceae",
+    genus == "Argentina" ~ "Rosaceae",
+    genus == "Bromopsis" ~ "Poaeceae",
+    genus == "Chamaecytisus" ~ "Fabaceae",
+    genus == "Chamerion" ~ "Onagraceae",
+    genus == "Chamomilla" ~ "Asteraceae",
+    genus == "Foeniculum" ~ "Apiaceae",
+    genus == "Galactites" ~ "Asteraceae",
+    genus == "Leopoldia" ~ "	Asparagaceae",
+    genus == "Lithospermum" ~ "Boraginaceae",
+    genus == "Mahonia" ~ "Berberidaceae",
+    genus == "Malcolmia" ~ "	Brassicaceae",
+    genus == "Noccaea" ~ "Brassicaceae",
+    genus == "Pentanema" ~ "	Asteraceae",
+    genus == "Poterium" ~ "Rosaceae",
+    genus == "Rorippa" ~ "Brassicaceae",
+    genus == "Vinca" ~ "Apocynaceae",
+    .default = family)) %>%
+  # fill in the remaining higher levels by grouping by family and calling fill()
+  group_by(family) %>%
+  fill(c(order), .direction = "downup") %>%
+  ungroup() %>%
+  # region is only meaningful in Germany and Siberia
+  mutate(group = if_else(
+    country %in% c("Germany", "Serbia"), region, country
+  )) %>%
+  # treat missing flower cover as NA
+  mutate(total_flower_cover = if_else(total_flower_cover < 0, NA, total_flower_cover))
+```
+
+# Write to file
+```{r}
+write_rds(plants_final, "../data/processed/plants.rds")
+```

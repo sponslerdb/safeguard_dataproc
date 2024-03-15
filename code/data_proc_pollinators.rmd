@@ -1,0 +1,978 @@
+---
+title: "data proc"
+output: html_document
+---
+
+# Packages
+```{r}
+#library(sf)
+library(tidyverse)
+library(janitor)
+library(see)
+library(naniar)
+
+library(taxize)
+library(taxonomizr)
+# NCBI API key - stored in ~./.Renviron, automatically retrieved
+# a85744226b98d88424358177cd81d0a21207
+
+# Prepared NCBI database 08.02.2024
+# prepareDatabase(getAccessions = FALSE)
+```
+
+# Custom functions
+```{r}
+
+# For data sets with single name in pollinator_species
+prep_pollinators1 <- function(x, country) {
+  
+  # force country to be read as a string
+  country = enquo(country)
+  
+  # this will generate the output data frame
+  x %>%
+    # rename site
+    rename(site = SiteID) %>%
+    # take first 10 characters of date, dropping hms portion
+    mutate(date = str_extract(date, "^.{10}"), 
+           # make proper date field
+           date = dmy(date)) %>%  
+    # combine genus and species names
+    mutate(user_supplied_name = if_else(
+      !is.na(pollinator_species),
+      paste(pollinator_genus, pollinator_species, sep = " "),
+      pollinator_genus) 
+    ) %>%
+    # remove stray white space
+    mutate(user_supplied_name = str_squish(user_supplied_name)) %>%
+    # add country name
+    mutate(country = !!country)
+}
+
+# For data sets with full binomial in pollinator_species
+prep_pollinators2 <- function(x, country) {
+  
+  country = enquo(country)
+  
+  x %>%
+    # rename site
+    rename(site = SiteID) %>%
+    # make proper date field
+    mutate(date = str_extract(date, "^.{10}"),
+           date = dmy(date)) %>%
+    # prepare name for taxize input
+    separate(pollinator_species, c("genus", "species"), remove = FALSE) %>%
+    mutate(user_supplied_name = if_else(
+      !is.na(pollinator_species),
+      paste(genus, species, sep = " "),
+      pollinator_genus) 
+    ) %>%
+    # remove stray white space
+    mutate(user_supplied_name = str_squish(user_supplied_name)) %>%
+    # add country name
+    mutate(country = !!country)
+}
+
+# Taxonomy check
+check_tax_pollinators <- function(x) {
+  
+  # Extract unique taxa
+  taxa <- x %>%
+    select(user_supplied_name) %>%
+    distinct()
+  
+  # match to taxize databases
+  gnr_resolve(taxa$user_supplied_name, 
+              data_source_ids = c(11, 12), # GBIF + Encyclopedia of Life 
+              canonical = TRUE) %>%
+    select(user_supplied_name, 
+           submitted_name, 
+           score, 
+           matched_name = matched_name2) %>%
+    distinct()
+}
+
+# 4 # NCBI
+# 11 # GBIF
+# 12 # Encyclopedia of Life
+# 196 # WFO
+# 197 # WCVP
+```
+
+# Prepare individual data sets
+## Belgium
+```{r}
+belgium_pollinators.in <- read_delim("../data/raw/belgium/11180_Task_2.3_Pollinator__1.3.3/11180.txt",
+                                     delim = "\t") %>%
+  prep_pollinators1(country = "Belgium")
+
+# Check using taxize
+belgium_pollinator_tax_check <- check_tax_pollinators(belgium_pollinators.in)
+  
+# Make any necessary corrections (check all matches < 98%) 
+belgium_pollinator_tax.final <- belgium_pollinator_tax_check %>%
+  # manual corrections
+  mutate(final_name = case_when(
+    user_supplied_name == "blank" ~ "blank",
+    .default = matched_name
+  )) %>%
+  distinct() 
+
+# Join back into the original table
+belgium_pollinators.out <- belgium_pollinators.in %>%
+  left_join(belgium_pollinator_tax.final) %>%
+  select(country, region, site, date, transect_type, transect_round, 
+         transect_length, subtransect, user_supplied_name, pollinator_group,
+         submitted_name, matched_name, final_name, number_of_specimens) %>%
+  mutate(subtransect = as.character(subtransect)) %>%
+  # just to make sure we only have one line per species per sample
+  group_by(country, region, site, date, transect_type, transect_round, 
+           transect_length, subtransect, user_supplied_name, pollinator_group,
+           submitted_name, matched_name, final_name) %>%
+  summarize(number_of_specimens = sum(number_of_specimens)) %>%
+  filter(!is.na(pollinator_group))
+```
+
+## Estonia
+```{r}
+estonia_pollinators.in <- read_delim("../data/raw/estonia/11120_WP2_3_FieldData_Poll_1.2.3/11120.txt",
+                                     delim = "\t") %>%
+  prep_pollinators2(country = "Estonia")
+
+# Check using taxize
+estonia_pollinator_tax_check <- check_tax_pollinators(estonia_pollinators.in)
+  
+# Make any necessary corrections (check all matches < 98%) 
+estonia_pollinator_tax.final <- estonia_pollinator_tax_check %>%
+  # manual corrections
+  mutate(final_name = case_when(
+    user_supplied_name == "Chrisotoxum festivum" ~ "Chrysotoxum festivum",
+    .default = matched_name
+  )) %>%
+  distinct() 
+
+# Join back into the original table
+estonia_pollinators.out <- estonia_pollinators.in %>%
+  left_join(estonia_pollinator_tax.final) %>%
+  select(country, region, site, date, transect_type, transect_round, 
+         transect_length, subtransect, user_supplied_name,  pollinator_group,
+         submitted_name, matched_name, final_name, number_of_specimens) %>%
+  mutate(subtransect = as.character(subtransect)) %>%
+  # final corrections
+  mutate(final_name = case_when(
+    user_supplied_name == "Rhingiacampestris" ~ "Rhingia campestris",
+    .default = final_name
+  )) %>%
+  mutate(
+    region = case_when(
+      region == 1 ~ "EST1",
+      region == 2 ~ "EST2",
+      region == 3 ~ "EST3",
+      region == 4 ~ "EST4")
+  ) %>%
+  # just to make sure we only have one line per species per sample
+  group_by(country, region, site, date, transect_type, transect_round, 
+           transect_length, subtransect, user_supplied_name, pollinator_group,
+           submitted_name, matched_name, final_name) %>%
+  summarize(number_of_specimens = sum(number_of_specimens)) %>%
+  filter(!is.na(pollinator_group))
+```
+
+## France
+```{r}
+france_pollinators.in <- read_delim("../data/raw/france/11840_WP2_FieldData_Pollin_1.1.1/11840.txt",
+                                     delim = "\t") %>%
+  prep_pollinators2(country = "France")
+
+# Check using taxize
+france_pollinator_tax_check <- check_tax_pollinators(france_pollinators.in)
+  
+# Make any necessary corrections (check all matches < 98%) 
+france_pollinator_tax.final <- france_pollinator_tax_check %>%
+  # manual corrections
+  mutate(final_name = case_when(
+    user_supplied_name == "blank" ~ "blank",
+    .default = matched_name
+  )) %>%
+  distinct() 
+
+# Join back into the original table
+france_pollinators.out <- france_pollinators.in %>%
+  left_join(france_pollinator_tax.final) %>%
+  select(country, region, site, date, transect_type, transect_round, 
+         transect_length, subtransect, user_supplied_name, pollinator_group, 
+         submitted_name, matched_name, final_name, number_of_specimens) %>%
+  mutate(subtransect = as.character(subtransect)) %>%
+  # final corrections
+  mutate(final_name = case_when(
+    user_supplied_name == "filipendulae NA" ~ "Zygaena filipendulae",
+    .default = final_name
+  )) %>%
+  mutate(transect_length = as.numeric(transect_length)) %>%
+  # just to make sure we only have one line per species per sample
+  group_by(country, region, site, date, transect_type, transect_round, 
+           transect_length, subtransect, user_supplied_name, pollinator_group,
+           submitted_name, matched_name, final_name) %>%
+  summarize(number_of_specimens = sum(number_of_specimens)) %>%
+  filter(!is.na(pollinator_group))
+```
+
+## Germany (east)
+```{r}
+germany_east_pollinators.in <- read_delim("../data/raw/germany_east/12020_WP2.3_FieldData_Poll_2.3.4/12020.txt",
+                                     delim = "\t") %>%
+  prep_pollinators1(country = "Germany")
+  
+# Check using taxize
+germany_east_pollinator_tax_check <- check_tax_pollinators(germany_east_pollinators.in)
+  
+# Make any necessary corrections (check all matches < 98%) 
+germany_east_pollinator_tax.final <- germany_east_pollinator_tax_check %>%
+  # manual corrections
+  mutate(final_name = case_when(
+    user_supplied_name == "Polygonia c_album" ~ "Polygonia c-album",
+    user_supplied_name == "Aporia agestis" ~ "Aricia agestis", # check with Christophe
+    .default = matched_name
+  )) %>%
+  distinct() 
+
+# Join back into the original table
+germany_east_pollinators.out <- germany_east_pollinators.in %>%
+  left_join(germany_east_pollinator_tax.final) %>%
+  select(country, region, site, date, transect_type, transect_round, 
+         transect_length, subtransect, user_supplied_name, pollinator_group, 
+         submitted_name, matched_name, final_name, number_of_specimens) %>%
+  mutate(subtransect = as.character(subtransect)) %>%
+  # final corrections
+  mutate(final_name = case_when(
+    user_supplied_name == "Bombus_ lapidarius" ~ "Bombus lapidarius",
+    .default = final_name
+  )) %>%
+  # in original data, each row is an observation, so we need to manually calculate # specimens
+  group_by(site, transect_type, transect_round, subtransect, final_name) %>%
+  mutate(number_of_specimens = n()) %>%
+  # just to make sure we only have one line per species per sample
+  group_by(country, region, site, date, transect_type, transect_round, 
+           transect_length, subtransect, user_supplied_name, pollinator_group,
+           submitted_name, matched_name, final_name) %>%
+  summarize(number_of_specimens = sum(number_of_specimens)) %>%
+  filter(!is.na(pollinator_group))
+```
+
+## Germany (west)
+```{r}
+germany_west_pollinators.in <- read_delim(
+  "../data/raw/germany_west/11320_WP2_FieldData_Pollin_1.3.2/11320.txt",
+  delim = "\t"
+  ) %>%
+  prep_pollinators1(country = "Germany")
+
+# Check using taxize
+germany_west_pollinator_tax_check <- check_tax_pollinators(germany_west_pollinators.in)
+  
+# Make any necessary corrections (check all matches < 98%) 
+germany_west_pollinator_tax.final <- germany_west_pollinator_tax_check %>%
+  # manual corrections
+  mutate(final_name = case_when(
+    user_supplied_name == "Colias hyale alfacariensis" ~ "Colias",
+    .default = matched_name
+  )) %>%
+  distinct() 
+
+# Join back into the original table
+germany_west_pollinators.out <- germany_west_pollinators.in %>%
+  left_join(germany_west_pollinator_tax.final) %>%
+  select(country, region, site, date, transect_type, transect_round, 
+         transect_length, subtransect, user_supplied_name, pollinator_group, 
+         submitted_name, matched_name, final_name, number_of_specimens) %>%
+  mutate(subtransect = as.character(subtransect)) %>%
+  # final corrections
+  mutate(final_name = case_when(
+    user_supplied_name == "Leptidea sinapis juvernica" ~ "Leptidea sinapis",
+    .default = final_name
+  )) %>%
+  # just to make sure we only have one line per species per sample
+  group_by(country, region, site, date, transect_type, transect_round, 
+           transect_length, subtransect, user_supplied_name, pollinator_group,
+           submitted_name, matched_name, final_name) %>%
+  summarize(number_of_specimens = sum(number_of_specimens)) %>%
+  filter(!is.na(pollinator_group))
+```
+
+## Hungary
+```{r}
+hungary_pollinators.in <- read_delim("../data/raw/hungary/11300_WP2_3_field_data_Hun_1.2.1/11300.txt",
+                                     delim = "\t") %>%
+  prep_pollinators1(country = "Hungary")
+
+# Check using taxize
+hungary_pollinator_tax_check <- check_tax_pollinators(hungary_pollinators.in)
+  
+# Make any necessary corrections (check all matches < 98%) 
+hungary_pollinator_tax.final <- hungary_pollinator_tax_check %>%
+  # manual corrections
+  mutate(final_name = case_when(
+    user_supplied_name == "Lycanidae sp." ~ "Lycaenidae",
+    .default = matched_name
+  )) %>%
+  distinct() 
+
+# Join back into the original table
+hungary_pollinators.out <- hungary_pollinators.in %>%
+  left_join(hungary_pollinator_tax.final) %>%
+  select(country, region, site, date, transect_type, transect_round, 
+         transect_length, subtransect, user_supplied_name, pollinator_group, 
+         submitted_name, matched_name, final_name, number_of_specimens) %>%
+  mutate(subtransect = as.character(subtransect)) %>%
+  # final corrections
+  mutate(final_name = case_when(
+    user_supplied_name == "Tetraloniella alticincta" ~ "Tetralonia alticincta",
+    user_supplied_name == "Tetraloniella nana" ~ "Tetralonia nana",
+    user_supplied_name == "Tetraloniella pollinosa" ~ "Tetralonia pollinosa",
+    user_supplied_name == "Tetraloniella salicariae" ~ "Tetralonia salicariae",
+    .default = final_name
+  )) %>%
+  # just to make sure we only have one line per species per sample
+  group_by(country, region, site, date, transect_type, transect_round, 
+           transect_length, subtransect, user_supplied_name, pollinator_group,
+           submitted_name, matched_name, final_name) %>%
+  summarize(number_of_specimens = sum(number_of_specimens)) %>%
+  filter(!is.na(pollinator_group) & pollinator_group != "nothing") 
+```
+
+## Italy
+```{r}
+italy_pollinators.in <- read_delim("../data/raw/italy/11020_UNIPD_task_2.3_polli_1.1.2/11020.txt",
+                                     delim = "\t") %>%
+  prep_pollinators2(country = "Italy")
+  
+# Check using taxize
+italy_pollinator_tax_check <- check_tax_pollinators(italy_pollinators.in)
+  
+# Make any necessary corrections (check all matches < 98%) 
+italy_pollinator_tax.final <- italy_pollinator_tax_check %>%
+  # manual corrections
+  mutate(final_name = case_when(
+    user_supplied_name == "blank" ~ "blank",
+    .default = matched_name
+  )) %>%
+  distinct() 
+
+# Join back into the original table
+italy_pollinators.out <- italy_pollinators.in %>%
+  left_join(italy_pollinator_tax.final) %>%
+  select(country, region, site, date, transect_type, transect_round, 
+         transect_length, subtransect, user_supplied_name, pollinator_group, 
+         submitted_name, matched_name, final_name, number_of_specimens) %>%
+  mutate(subtransect = as.character(subtransect)) %>%
+  # final corrections
+  mutate(final_name = case_when(
+    user_supplied_name == "Lysandra/Polyommatus" ~ "Lycaenidae",
+    .default = final_name
+  )) %>%
+  # just to make sure we only have one line per species per sample
+  group_by(country, region, site, date, transect_type, transect_round, 
+           transect_length, subtransect, user_supplied_name, pollinator_group,
+           submitted_name, matched_name, final_name) %>%
+  summarize(number_of_specimens = sum(number_of_specimens)) %>%
+  filter(!is.na(pollinator_group)) 
+```
+
+## Romania
+```{r}
+
+romania_pollinators.in <- read_delim(
+  "../data/raw/romania/11560_Pollinators_T2.3_Rom_1.1.5/11560.txt",
+  delim = "\t") %>%
+  prep_pollinators1(country = "Romania")
+
+
+# Check using taxize
+romania_pollinator_tax_check <- check_tax_pollinators(romania_pollinators.in)
+  
+# Make any necessary corrections (check all matches < 98%) 
+romania_pollinator_tax.final <- romania_pollinator_tax_check %>%
+  # manual corrections
+  mutate(final_name = case_when(
+    user_supplied_name == "Ipiclides podalirius" ~ "Ipiclides podalirius",
+    user_supplied_name == "Cupido decolarata" ~ "Cupido decolorata",
+    user_supplied_name == "Ipiclides podalirius" ~ "Iphiclides podalirius",
+    user_supplied_name == "Lycaena virgaurea" ~ "Lycaena virgaureae",
+    user_supplied_name == "Lycaena phlaes" ~ "Lycaena phlaeas",
+    user_supplied_name == "Halictus cf._eurygnathus" ~ "Halictus eurygnathus",
+    user_supplied_name == "Bombus cf._veteranus" ~ "Bombus veteranus",
+    user_supplied_name == "Halictus cf._simplex" ~ "Halictus simplex",
+    .default = matched_name
+  )) %>%
+  distinct() 
+
+# Join back into the original table
+romania_pollinators.out <- romania_pollinators.in %>%
+  left_join(romania_pollinator_tax.final) %>%
+  select(country, region, site, date, transect_type, transect_round, 
+         transect_length, subtransect, user_supplied_name, pollinator_group, 
+         submitted_name, matched_name, final_name, number_of_specimens) %>%
+  mutate(subtransect = as.character(subtransect)) %>%
+  # final corrections
+  mutate(final_name = case_when(
+    user_supplied_name == "Meltaea aurelia/britomartis" ~ "Melitaea",
+    .default = final_name
+  )) %>%
+  # fix Excel error
+  mutate(date = str_replace_all(date, "2023","2022"),
+         date = str_replace_all(date, "2024","2022"),
+         date = str_replace_all(date, "2025","2022"),
+         date = str_replace_all(date, "2026","2022"),
+         date = str_replace_all(date, "2027","2022"),
+         date = str_replace_all(date, "2028","2022"),
+         date = str_replace_all(date, "2029","2022"),
+         date = str_replace_all(date, "2030","2022"),
+         date = str_replace_all(date, "2031","2022"),
+         date = str_replace_all(date, "2032","2022"),
+         date = str_replace_all(date, "2033","2022")) %>%
+  mutate(date = ymd(date)) %>%
+  # just to make sure we only have one line per species per sample
+  group_by(country, region, site, date, transect_type, transect_round, 
+           transect_length, subtransect, user_supplied_name, pollinator_group,
+           submitted_name, matched_name, final_name) %>%
+  summarize(number_of_specimens = sum(number_of_specimens)) %>%
+  filter(!is.na(pollinator_group))
+```
+
+## Serbia
+```{r}
+serbia_pollinators.in <- read_delim("../data/raw/serbia/11000_Field_data_task_2.3__1.1.3/11000.txt",
+                                     delim = "\t") %>%
+  prep_pollinators1(country = "Serbia")
+
+# Check using taxize
+serbia_pollinator_tax_check <- check_tax_pollinators(serbia_pollinators.in)
+  
+# Make any necessary corrections (check all matches < 98%) 
+serbia_pollinator_tax.final <- serbia_pollinator_tax_check %>%
+  # manual corrections
+  mutate(final_name = case_when(
+    user_supplied_name == "Philhelius citrofasciatus" ~ "Philhelius citrofasciatus",
+    user_supplied_name == "Epistophella euchroma" ~ "Epistrophella euchroma",
+    user_supplied_name == "Seladonia semitecta" ~ "Seladonia semitecta",
+    user_supplied_name == "Sphaerophoria mellifera" ~ "Sphaerophoria scripta",
+    user_supplied_name == "Philhelius pedissequus" ~ "Philhelius pedissequus",
+    .default = matched_name
+  )) %>%
+  distinct() 
+
+# Join back into the original table
+serbia_pollinators.out <- serbia_pollinators.in %>%
+  left_join(serbia_pollinator_tax.final) %>%
+  select(country, region, site, date, transect_type, transect_round, 
+         transect_length, subtransect, user_supplied_name, pollinator_group, 
+         submitted_name, matched_name, final_name, number_of_specimens) %>%
+  mutate(subtransect = as.character(subtransect)) %>%
+  # final corrections
+  mutate(final_name = case_when(
+    user_supplied_name == "Philhelius pedissequus" ~ "Philhelius pedissequum",
+    user_supplied_name == "Philhelius citrofasciatus" ~ "Philhelius citrofasciata",
+    .default = final_name
+  )) %>%
+  # just to make sure we only have one line per species per sample
+  group_by(country, region, site, date, transect_type, transect_round, 
+           transect_length, subtransect, user_supplied_name, pollinator_group,
+           submitted_name, matched_name, final_name) %>%
+  summarize(number_of_specimens = sum(number_of_specimens)) %>%
+  filter(!is.na(pollinator_group)) 
+```
+
+## Spain
+```{r}
+# Due to some messy comment field, I cannot load the data normally. This is a 
+# workaround using the base R read.delim() function. I don't know why it works,
+# but it seems to handle the bad field only at the cost of damaging the
+# columns to the right of it, which I end up dropping anyway.
+spain_pollinators.in <- read.delim("../data/raw/spain/11700_WP2_FieldData_Pollin_1.1.1/11700.txt") %>%
+  tibble() %>%
+  prep_pollinators1(country = "Spain")
+
+# Check using taxize
+spain_pollinator_tax_check <- check_tax_pollinators(spain_pollinators.in)
+  
+# Make any necessary corrections (check all matches < 98%) 
+spain_pollinator_tax.final <- spain_pollinator_tax_check %>%
+  # manual corrections
+  mutate(final_name = case_when(
+    user_supplied_name == "Andrena alma" ~ "Andrena almas",
+    user_supplied_name == "Coccinella septemunctata" ~ "Coccinella septempunctata",
+    .default = matched_name
+  )) %>%
+  distinct() 
+
+# Join back into the original table
+spain_pollinators.out <- spain_pollinators.in %>%
+  left_join(spain_pollinator_tax.final) %>%
+  select(country, region, site, date, transect_type, transect_round, 
+         transect_length, subtransect, user_supplied_name, pollinator_group, 
+         submitted_name, matched_name, final_name, number_of_specimens) %>%
+  mutate(subtransect = as.character(subtransect)) %>%
+  # final corrections
+  mutate(final_name = case_when(
+    user_supplied_name == "Psithyrus vestialis" ~ "Bombus vestalis",
+    .default = final_name
+  )) %>%
+  # Spain used single observation per row to record abundance
+  group_by(country, region, site, date, transect_type, transect_round, 
+           transect_length, subtransect, user_supplied_name, pollinator_group,
+           submitted_name, matched_name, final_name) %>%
+  summarize(number_of_specimens = n()) %>%
+  filter(!is.na(pollinator_group))
+```
+
+## Sweden
+More than half not identified at the genus level. Check with Yann about this.
+```{r}
+sweden_pollinators.in <- read_delim("../data/raw/sweden/11520_WP_FieldData_Pollina_1.1.0/11520.txt",
+                                     delim = "\t") %>%
+  prep_pollinators1(country = "Sweden")
+
+# Check using taxize
+sweden_pollinator_tax_check <- check_tax_pollinators(sweden_pollinators.in)
+  
+# Make any necessary corrections (check all matches < 98%) 
+sweden_pollinator_tax.final <- sweden_pollinator_tax_check %>%
+  # manual corrections
+  mutate(final_name = case_when(
+    user_supplied_name == "blank" ~ "blank",
+    .default = matched_name
+  )) %>%
+  distinct() 
+
+# Join back into the original table
+sweden_pollinators.out <- sweden_pollinators.in %>%
+  left_join(sweden_pollinator_tax.final) %>%
+  select(country, region, site, date, transect_type, transect_round, 
+         transect_length, subtransect, user_supplied_name, pollinator_group, 
+         submitted_name, matched_name, final_name, number_of_specimens) %>%
+  mutate(subtransect = as.character(subtransect)) %>%
+  # final corrections
+  mutate(final_name = case_when(
+    user_supplied_name == "blank" ~ "blank",
+    .default = final_name
+  )) %>%
+  # just to make sure we only have one line per species per sample
+  group_by(country, region, site, date, transect_type, transect_round, 
+           transect_length, subtransect, user_supplied_name, pollinator_group,
+           submitted_name, matched_name, final_name) %>%
+  summarize(number_of_specimens = sum(number_of_specimens)) %>%
+  filter(!is.na(pollinator_group)) %>%
+  filter(number_of_specimens >= 0) # gets rid of a few lines of -999999
+```
+
+## Switzerland
+```{r}
+switzerland_pollinators.in <- read_delim("../data/raw/switzerland/11440_WP2_FieldData_Pollin_2.1.1/11440.txt",
+                                     delim = "\t") %>%
+  prep_pollinators1(country = "Switzerland")
+
+# Check using taxize
+switzerland_pollinator_tax_check <- check_tax_pollinators(switzerland_pollinators.in)
+  
+# Make any necessary corrections (check all matches < 98%) 
+switzerland_pollinator_tax.final <- switzerland_pollinator_tax_check %>%
+  # manual corrections
+  mutate(final_name = case_when(
+    user_supplied_name == "Philhelius pedissequus" ~ "Philhelius pedissequus",
+    user_supplied_name == "blank" ~ "blank",
+    .default = matched_name
+  )) %>%
+  distinct() 
+
+# Join back into the original table
+switzerland_pollinators.out <- switzerland_pollinators.in %>%
+  left_join(switzerland_pollinator_tax.final) %>%
+  select(country, region, site, date, transect_type, transect_round, 
+         transect_length, subtransect, user_supplied_name, pollinator_group, 
+         submitted_name, matched_name, final_name, number_of_specimens) %>%
+  mutate(subtransect = as.character(subtransect)) %>%
+  # final corrections
+  mutate(final_name = case_when(
+    user_supplied_name == "blank" ~ "blank",
+    user_supplied_name == "Philhelius pedissequus" ~ "Philhelius pedissequum",
+    .default = final_name
+  )) %>%
+  # just to make sure we only have one line per species per sample
+  group_by(country, region, site, date, transect_type, transect_round, 
+           transect_length, subtransect, user_supplied_name, pollinator_group,
+           submitted_name, matched_name, final_name) %>%
+  summarize(number_of_specimens = sum(number_of_specimens)) %>%
+  filter(!is.na(pollinator_group) & pollinator_group != "0")
+```
+
+## UK
+```{r}
+uk_pollinators.in <- read_delim("../data/raw/uk/wp2.3_pollinator_uk.csv",
+                                     delim = ",") %>%
+  rename(SiteID = site_ID) %>%
+  prep_pollinators1(country = "United Kingdom")
+  
+# Check using taxize
+uk_pollinator_tax_check <- check_tax_pollinators(uk_pollinators.in)
+  
+# Make any necessary corrections (check all matches < 98%) 
+uk_pollinator_tax.final <- uk_pollinator_tax_check %>%
+  # manual corrections
+  mutate(final_name = case_when(
+    user_supplied_name == "Philhelius citrofasciatum" ~ "Philhelius citrofasciatum",
+    .default = matched_name
+  )) %>%
+  distinct() 
+
+# Join back into the original table
+uk_pollinators.out <- uk_pollinators.in %>%
+  left_join(uk_pollinator_tax.final) %>%
+  select(country, region, site, date, transect_type, transect_round, 
+         transect_length, subtransect, user_supplied_name,  pollinator_group,
+         submitted_name, matched_name, final_name, number_of_specimens) %>%
+  mutate(subtransect = as.character(subtransect)) %>%
+  # final corrections
+  mutate(final_name = case_when(
+    user_supplied_name == "Pieris� napi" ~ "Pieris napi",
+    user_supplied_name == "Pieris� brassicae" ~ "Pieris brassicae",
+    user_supplied_name == "Pieris� rapae" ~ "Pieris rapae",
+    user_supplied_name == "Seladonia� tumulorum" ~ "Seladonia tumulorum",
+    user_supplied_name == "Philhelius citrofasciatum" ~ "Philhelius citrofasciata",
+    .default = final_name
+  )) %>%
+  # just to make sure we only have one line per species per sample
+  group_by(country, region, site, date, transect_type, transect_round, 
+           transect_length, subtransect, user_supplied_name, pollinator_group,
+           submitted_name, matched_name, final_name) %>%
+  summarize(number_of_specimens = sum(number_of_specimens)) %>%
+  filter(!is.na(pollinator_group))
+```
+
+# Inspect
+```{r}
+comparison <- compare_df_cols(belgium_pollinators.out, 
+                estonia_pollinators.out,
+                france_pollinators.out,
+                germany_east_pollinators.out,
+                germany_west_pollinators.out,
+                hungary_pollinators.out,
+                italy_pollinators.out,
+                romania_pollinators.out,
+                serbia_pollinators.out,
+                spain_pollinators.out,
+                sweden_pollinators.out,
+                switzerland_pollinators.out,
+                uk_pollinators.out)
+```
+
+# Combine and process a bit
+```{r}
+pollinators_join <- bind_rows(belgium_pollinators.out,
+                              estonia_pollinators.out,
+                              france_pollinators.out,
+                              germany_east_pollinators.out,
+                              germany_west_pollinators.out,
+                              hungary_pollinators.out,
+                              italy_pollinators.out,
+                              romania_pollinators.out,
+                              serbia_pollinators.out,
+                              spain_pollinators.out,
+                              sweden_pollinators.out,
+                              switzerland_pollinators.out,
+                              uk_pollinators.out) %>%
+  # replace empty codes with NAs
+  replace_with_na(replace = list(subtransect = -999999,
+                                 transect_length = -999999)) %>%
+  ungroup()
+ 
+```
+
+# Add higher taxonomy
+```{r}
+pollinators_final <- pollinators_join %>%
+  mutate(taxon_id = getId(final_name,
+                          sqlFile = "nameNode.sqlite"),
+         order = getTaxonomy(taxon_id,
+                             desiredTaxa = c("order"),
+                             sqlFile = "nameNode.sqlite") %>% c(),
+         superfamily = getTaxonomy(taxon_id,
+                             desiredTaxa = c("superfamily"),
+                             sqlFile = "nameNode.sqlite") %>% c(),
+         family = getTaxonomy(taxon_id,
+                             desiredTaxa = c("family"),
+                             sqlFile = "nameNode.sqlite") %>% c(),
+         genus = getTaxonomy(taxon_id,
+                             desiredTaxa = c("genus"),
+                             sqlFile = "nameNode.sqlite") %>% c(),
+         species = getTaxonomy(taxon_id,
+                             desiredTaxa = c("species"),
+                             sqlFile = "nameNode.sqlite") %>% c()) %>%
+  # manually complete taxa that didn't match the NCBI database
+  mutate(genus = case_when(
+    final_name == "Aglais io" ~ "Aglais",
+    final_name == "Aglais urticae" ~ "Aglais",
+    final_name == "Amegilla garrula" ~ "Amegilla",
+    final_name == "Amegilla savignyi" ~ "Amegilla",
+    final_name == "Andrena" ~ "Andrena",
+    final_name == "Andrena abrupta" ~ "Andrena",
+    final_name == "Andrena afzeliella" ~ "Andrena",
+    final_name == "Andrena almas" ~ "Andrena",
+    final_name == "Andrena antigana" ~ "Andrena",
+    final_name == "Andrena assimilis" ~ "Andrena",
+    final_name == "Andrena bellidis" ~ "Andrena",
+    final_name == "Andrena braunsiana" ~ "Andrena",
+    final_name == "Andrena clypella" ~ "Andrena",
+    final_name == "Andrena croceiventris" ~ "Andrena",
+    final_name == "Andrena curvana" ~ "Andrena",
+    final_name == "Andrena dorsalis" ~ "Andrena",
+    final_name == "Andrena gelriae" ~ "Andrena",
+    final_name == "Andrena mocsaryi" ~ "Andrena",
+    final_name == "Andrena ovata" ~ "Andrena",
+    final_name == "Andrena propinqua" ~ "Andrena",
+    final_name == "Andrena ranunculi" ~ "Andrena",
+    final_name == "Andrena rhyssonota" ~ "Andrena",
+    final_name == "Andrena sardoa" ~ "Andrena",
+    final_name == "Andrena saxonica" ~ "Andrena",
+    final_name == "Andrena spinigera" ~ "Andrena",
+    final_name == "Andrena varians" ~ "Andrena",
+    final_name == "Andrena variabilis" ~ "Andrena",
+    final_name == "Andrena villipes" ~ "Andrena",
+    final_name == "Anthidium nanum" ~ "Anthidium",
+    final_name == "Anthidium strigatum" ~ "Anthidium",
+    final_name == "Anthophora dispar" ~ "Anthophora",
+    final_name == "Antrax" ~ "Antrax",
+    final_name == "Aphantopus hyperantus" ~ "Aphantopus",
+    final_name == "Argynnis adippe" ~ "Argynnis",
+    final_name == "Argynnis niobe" ~ "Argynnis",
+    final_name == "Bombus" ~ "Bombus",
+    final_name == "Bombylella atra" ~ "Bombylella",
+    final_name == "Bombylius canescens" ~ "Bombylius",
+    final_name == "Bombylius torquatus" ~ "Bombylius",
+    final_name == "Bombylius venosus" ~ "Bombylius",
+    final_name == "Brachypalpus valgus" ~ "Brachypalpus",
+    final_name == "Carcharodus floccifera" ~ "Carcharodus",
+    final_name == "Ceratina" ~ "Ceratina",
+    final_name == "Ceratina gravidula" ~ "Ceratina",
+    final_name == "Chasmatopterus illigeri" ~ "Chasmatopterus",
+    final_name == "Chasmatopterus villosulus" ~ "Chasmatopterus",
+    final_name == "Cheilosia griseiventris" ~ "Cheilosia",
+    final_name == "Cheilosia ruffipes" ~ "Cheilosia",
+    final_name == "Coelioxys afer" ~ "Coelioxys",
+    final_name == "Coelioxys argenteus" ~ "Coelioxys",
+    final_name == "Coelioxys conica" ~ "Coelioxys",
+    final_name == "Coelioxys elongatus" ~ "Coelioxys",
+    final_name == "Coelioxys obtusus" ~ "Coelioxys",
+    final_name == "Coelioxys polycentris" ~ "Coelioxys",
+    final_name == "Coelioxys quadridentata" ~ "Coelioxys",
+    final_name == "Colias alfacariensis" ~ "Colias",
+    final_name == "Colletes chengtehensis" ~ "Colletes",
+    final_name == "Cupido decolorata" ~ "Cupido",
+    final_name == "Dalmannia dorsalis" ~ "Dalmannia",
+    final_name == "Dischistus biroi" ~ "Dischistus",
+    final_name == "Dischistus senex" ~ "Dischistus",
+    final_name == "Ematurga atomaria" ~ "Ematurga",
+    final_name == "Eristalis jugorum" ~ "Eristalis",
+    final_name == "Eristalis lineata" ~ "Eristalis",
+    final_name == "Eucera" ~ "Eucera",
+    final_name == "Eucera hispana" ~ "Eucera",
+    final_name == "Eucera nigrifacies" ~ "Eucera",
+    final_name == "Eucera pollinosa" ~ "Eucera",
+    final_name == "Eucera seminuda" ~ "Eucera",
+    final_name == "Euchloe" ~ "Euchloe",
+    final_name == "Eumedonia eumedon" ~ "Eumedonia",
+    final_name == "Eumerus tarsalis" ~ "Eumerus",
+    final_name == "Favonius quercus" ~ "Favonius",
+    final_name == "Gonopteryx rhamni" ~ "Gonopteryx",
+    final_name == "Halictus" ~ "Halictus",
+    final_name == "Halictus asperulus" ~ "Halictus",
+    final_name == "Halictus brunnescens" ~ "Halictus",
+    final_name == "Halictus confusus" ~ "Halictus",
+    final_name == "Halictus crassepunctatus" ~ "Halictus",
+    final_name == "Halictus eurygnathus" ~ "Halictus",
+    final_name == "Halictus fumatipennis" ~ "Halictus",
+    final_name == "Halictus gavarnicus" ~ "Halictus",
+    final_name == "Halictus kessleri" ~ "Halictus",
+    final_name == "Halictus lativentris" ~ "Halictus",
+    final_name == "Halictus leucaheneus" ~ "Halictus",
+    final_name == "Halictus patellatus" ~ "Halictus",
+    final_name == "Halictus sajoi" ~ "Halictus",
+    final_name == "Halictus seladonius" ~ "Halictus",
+    final_name == "Halictus semitectus" ~ "Halictus",
+    final_name == "Halictus smaragdulus" ~ "Halictus",
+    final_name == "Halictus subauratus" ~ "Halictus",
+    final_name == "Halictus submediterraneus" ~ "Halictus",
+    final_name == "Halictus tetrazonius" ~ "Halictus",
+    final_name == "Halictus tumulorum" ~ "Halictus",
+    final_name == "Hoplitis antigae" ~ "Hoplitis",
+    final_name == "Hoplitis mazzuccoi" ~ "Hoplitis",
+    final_name == "Hylaeus" ~ "Hylaeus",
+    final_name == "Hylaeus annularis" ~ "Hylaeus",
+    final_name == "Hylaeus nigrifacies" ~ "Hylaeus",
+    final_name == "Hylaeus taeniolatus" ~ "Hylaeus",
+    final_name == "Hyponephele lycaon" ~ "Hyponephele",
+    final_name == "Iphiclides podalirius" ~ "Iphiclides",
+    final_name == "Lapposyrphus lapponicus" ~ "Lapposyrphus",
+    final_name == "Lasioglossum" ~ "Lasioglossum",
+    final_name == "Lasioglossum bimaculatum" ~ "Lasioglossum",
+    final_name == "Lasioglossum clypeatum" ~ "Lasioglossum",
+    final_name == "Lasioglossum corvinum" ~ "Lasioglossum",
+    final_name == "Lasioglossum crassepunctatum" ~ "Lasioglossum",
+    final_name == "Lasioglossum laeve" ~ "Lasioglossum",
+    final_name == "Lasioglossum laterale" ~ "Lasioglossum",
+    final_name == "Lasioglossum monstrificum" ~ "Lasioglossum",
+    final_name == "Lasioglossum orihuelicum" ~ "Lasioglossum",
+    final_name == "Lasioglossum quadrisignatum" ~ "Lasioglossum",
+    final_name == "Lasioglossum trichopygum" ~ "Lasioglossum",
+    final_name == "Lasioglossum truncaticolle" ~ "Lasioglossum",
+    final_name == "Lejogaster metallina" ~ "Lejogaster",
+    final_name == "Lindenius luteiventris" ~ "Lindenius",
+    final_name == "Lomatia lateralis" ~ "Lomatia",
+    final_name == "Lucilia" ~ "Lucilia",
+    final_name == "Lycaeides" ~ "Lycaeides",
+    final_name == "Lycaena helle" ~ "Lycaena",
+    final_name == "Maculinea arion" ~ "Maculinea",
+    final_name == "Matsumyia berberina" ~ "Matsumyia",
+    final_name == "Megalodontes bucephalus" ~ "Megalodontes",
+    final_name == "Melanogaster nuda" ~ "Melanogaster",
+    final_name == "Meligramma euchroma" ~ "Meligramma",
+    final_name == "Melitaea athalia" ~ "Melitaea",
+    final_name == "Melitaea aurelia" ~ "Melitaea",
+    final_name == "Melitaea britomartis" ~ "Melitaea",
+    final_name == "Melitaea parthenoides" ~ "Melitaea",
+    final_name == "Nomada braunsiana" ~ "Nomada",
+    final_name == "Nomada gribodoi" ~ "Nomada",
+    final_name == "Nomada numida" ~ "Nomada",
+    final_name == "Nomada oculata" ~ "Nomada",
+    final_name == "Nomia" ~ "Nomia",
+    final_name == "Nomiapis bispinosa" ~ "Nomiapis",
+    final_name == "Nomiapis diversipes" ~ "Nomiapis",
+    final_name == "Nomiapis femoralis" ~ "Nomiapis",
+    final_name == "Orthonevra frontalis" ~ "Orthonevra",
+    final_name == "Osmia adunca" ~ "Osmia",
+    final_name == "Osmia anthocopoides" ~ "Osmia",
+    final_name == "Osmia argyropyga" ~ "Osmia",
+    final_name == "Osmia bidentata" ~ "Osmia",
+    final_name == "Osmia bischoffi" ~ "Osmia",
+    final_name == "Osmia campanularum" ~ "Osmia",
+    final_name == "Osmia claviventris" ~ "Osmia",
+    final_name == "Osmia crenulata" ~ "Osmia",
+    final_name == "Osmia croatica" ~ "Osmia",
+    final_name == "Osmia florisomnis" ~ "Osmia",
+    final_name == "Osmia fulviventris" ~ "Osmia",
+    final_name == "Osmia leucomelana" ~ "Osmia",
+    final_name == "Osmia ligurica" ~ "Osmia",
+    final_name == "Osmia nasoproducta" ~ "Osmia",
+    final_name == "Osmia scutellaris" ~ "Osmia",
+    final_name == "Osmia truncorum" ~ "Osmia",
+    final_name == "Parage aegeria" ~ "Parage",
+    final_name == "Parageron incisus" ~ "Parageron",
+    final_name == "Paragus" ~ "Paragus",
+    final_name == "Paragus bradescui" ~ "Paragus",
+    final_name == "Philhelius citrofasciata" ~ "Philhelius",
+    final_name == "Philhelius pedissequum" ~ "Philhelius",
+    final_name == "Philhelius stackelbergi" ~ "Philhelius",
+    final_name == "Pieris" ~ "Pieris",
+    final_name == "Pipizella virens" ~ "Pipizella",
+    final_name == "Pipizella zeneggenensis" ~ "Pipizella",
+    final_name == "Polygonia c-album" ~ "Polygonia",
+    final_name == "Polygonia zephyrus" ~ "Polygonia",
+    final_name == "Polyommatus bellargus" ~ "Polyommatus",
+    final_name == "Polyommatus coridon" ~ "Polyommatus",
+    final_name == "Psilothrix viridicoerulea" ~ "Psilothrix",
+    final_name == "Psithyrus vestalis" ~ "Psithyrus",
+    final_name == "Pyronia bathseba" ~ "Pyronia",
+    final_name == "Pyronia cecilia" ~ "Pyronia",
+    final_name == "Pyronia tithonus" ~ "Pyronia",
+    final_name == "Pyrophaena rosarum" ~ "Pyrophaena",
+    final_name == "Rhophitoides canus" ~ "Rhophitoides",
+    final_name == "Rhyncomyia cuprea" ~ "Rhyncomyia",
+    final_name == "Riponnensia splendens" ~ "Riponnensia",
+    final_name == "Sarcophaga" ~ "Sarcophaga",
+    final_name == "Seladonia semitecta" ~ "Seladonia",
+    final_name == "Speyeria aglaja" ~ "Speyeria",
+    final_name == "Spilomyia saltuum" ~ "Spilomyia",
+    final_name == "Tetralonia alticincta" ~ "Tetralonia",
+    final_name == "Tetralonia malvae" ~ "Tetralonia",
+    final_name == "Tetralonia nana" ~ "Tetralonia",
+    final_name == "Tetralonia pollinosa" ~ "Tetralonia",
+    final_name == "Tetralonia salicariae" ~ "Tetralonia",
+    final_name == "Thyreus ramosus" ~ "Thyreus",
+    final_name == "Trachusa laeviventris" ~ "Trachusa",
+    final_name == "Usia" ~ "Usia",
+    final_name == "Usia aenea" ~ "Usia",
+    final_name == "Xylocopa" ~ "Xylocopa",
+    .default = genus)) %>%
+  # fill some of the missing higher levels by grouping by genus and calling fill()
+  group_by(genus) %>%
+  fill(c(order, superfamily, family), .direction = "downup") %>%
+  # finish the families manually; assigned based on manual GBIF search
+  mutate(family = case_when(
+    genus == "Aglais" ~ "Nymphalidae",
+    genus == "Antrax" ~ "Bombyliidae",
+    genus == "Aphantopus" ~ "Nymphalidae",
+    genus == "Bombylella" ~ "Bombyliidae",
+    genus == "Brachypalpus" ~ "Syrphidae",
+    genus == "Dalmannia" ~ "Conopidae",
+    genus == "Dischistus" ~ "Bombyliidae",
+    genus == "Ematurga" ~ "Geometridae",
+    genus == "Eumedonia" ~ "Lycaenidae",
+    genus == "Favonius" ~ "Lycaenidae",
+    genus == "Gonopteryx" ~ "Pieridae",
+    genus == "Hyponephele" ~ "Nymphalidae",
+    genus == "Lapposyrphus" ~ "Syrphidae",
+    genus == "Lejogaster" ~ "Syrphidae",
+    genus == "Lomatia" ~ "Bombyliidae",
+    genus == "Lucilia" ~ "Calliphoridae",
+    genus == "Lycaeides" ~ "Lycaenidae",
+    genus == "Maculinea" ~ "Lycaenidae",
+    genus == "Matsumyia" ~ "Syrphidae",
+    genus == "Meligramma" ~ "Syrphidae",
+    genus == "Nomia" ~ "Halictidae",
+    genus == "Nomiapis" ~ "Halictidae",
+    genus == "Orthonevra" ~ "Syrphidae",
+    genus == "Parage" ~ "Nymphalidae",
+    genus == "Parageron" ~ "Bombyliidae",
+    genus == "Philhelius" ~ "Syrphidae",
+    genus == "Polygonia" ~ "Nymphalidae",
+    genus == "Psilothrix" ~ "Dasytidae",
+    genus == "Pyronia" ~ "Nymphalidae",
+    genus == "Pyrophaena" ~ "Syrphidae",
+    genus == "Rhophitoides" ~ "Halictidae",
+    genus == "Rhyncomyia" ~ "Rhiniidae",
+    genus == "Riponnensia" ~ "Syrphidae",
+    genus == "Sarcophaga" ~ "Sarcophagidae",
+    genus == "Speyeria" ~ "Nymphalidae",
+    genus == "Spilomyia" ~ "Syrphidae",
+    genus == "Tetralonia" ~ "Apidae",
+    genus == "Usia" ~ "Bombyliidae",
+    .default = family)) %>%
+  # fill in the remaining higher levels by grouping by family and calling fill()
+  group_by(family) %>%
+  fill(c(order, superfamily), .direction = "downup") %>%
+  # add pollinator group based on taxonomy
+  mutate(pollinator_group = case_when(
+    family == "Syrphidae" ~ "HF",
+    genus == "Bombus" ~ "BB",
+    genus == "Apis" ~ "HB",
+    superfamily == "Apoidea" & 
+      !genus %in% c("Bombus", "Apis") ~ "WB",
+    order == "Lepidoptera" ~ "LP",
+    family != "Syrphidae" & 
+      superfamily != "Apoidea" & 
+      order != "Lepidoptera" & 
+      !is.na(order) ~ "other", 
+    .default = pollinator_group
+  )) %>%
+  ungroup() %>%
+  filter(!is.na(site)) %>%
+  mutate(transect_type = str_to_lower(transect_type)) %>%
+  # region is only meaningful in Germany and Siberia
+  mutate(group = if_else(
+    country %in% c("Germany", "Serbia"), region, country
+  ))
+```
+
+# Write to file
+```{r}
+write_rds(pollinators_final, "../data/processed/pollinators.rds")
+```

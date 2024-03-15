@@ -1,0 +1,212 @@
+---
+title: "data proc"
+output: html_document
+date: "2023-09-26"
+---
+
+# Packages
+```{r}
+#library(sf)
+library(tidyverse)
+library(janitor)
+library(see)
+library(naniar)
+```
+
+# Load individual data sets
+## Belgium
+```{r}
+belgium_climate.in <- read_delim("../data/raw/belgium/Task_2.3_Climate_BELGIUM_FILES/11220.txt",
+                                delim = "\t") %>%
+  mutate(date = str_extract(date, "^.{10}"),
+         date = dmy(date)) %>%
+  # special actions
+  mutate(humidity = as.numeric(NA)) %>%
+  mutate(country = "Belgium")
+
+```
+
+## Estonia
+```{r}
+estonia_climate.in <- read_delim("../data/raw/estonia/11160_WP2_3_FieldData_Clim_1.1.0/11160.txt",
+                                     delim = "\t")  %>%
+  mutate(date = str_extract(date, "^.{10}"),
+         date = dmy(date)) %>%
+  # special actions
+  mutate(humidity = as.numeric(NA)) %>%
+  mutate(country = "Estonia")
+```
+
+## France
+```{r}
+france_climate.in <- read_delim("../data/raw/france/11800_WP2_FieldData_climat_1.1.3/11800.txt",
+                                     delim = "\t")  %>%
+  mutate(date = str_extract(date, "^.{10}"),
+         date = dmy(date)) %>%
+  # special actions
+  mutate(humidity = as.numeric(NA)) %>%
+  select(-comment) %>%
+  mutate(country = "France")
+```
+
+## Germany (east)
+```{r}
+germany_east_climate.in <- read_delim("../data/raw/germany_east/12040_WP2.3_FieldData_Clim_1.1.0/12040.txt",
+                                     delim = "\t")  %>%
+  mutate(date = str_extract(date, "^.{10}"),
+         date = dmy(date)) %>%
+  # special actions
+  select(SiteID,
+         date,
+         wind = wind_beaufort,
+         temperature = temperature_c,
+         cloudiness = cloudiness_percent,
+         sunshine = sunshine_percent) %>%
+  mutate(humidity = as.numeric(NA)) %>%
+  mutate(country = "Germany")
+```
+
+## Germany (west)
+```{r}
+germany_west_climate.in <- read_delim("../data/raw/germany_west/11360_WP2_FieldData_Climat_1.1.1/11360.txt",
+                                     delim = "\t")  %>%
+  mutate(date = str_extract(date, "^.{10}"),
+         date = dmy(date)) %>%
+  # special actions
+  select(SiteID,
+         date,
+         wind = wind_beaufort,
+         temperature = temperature_c,
+         cloudiness = cloudiness_percent,
+         sunshine = sunshine_percent) %>%
+  mutate(humidity = as.numeric(NA)) %>%
+  mutate(country = "Germany")
+```
+
+## Hungary
+```{r}
+hungary_climate.in <- read_delim("../data/raw/hungary/11260_WP2_3_field_data_Hun_1.1.0/11260.txt",
+                                     delim = "\t")  %>%
+  mutate(date = str_extract(date, "^.{10}"),
+         date = dmy(date)) %>%
+  # special actions
+  mutate(humidity = as.numeric(NA)) %>%
+  mutate(country = "Hungary")
+```
+
+## Italy
+```{r}
+italy_climate.in <- read_delim("../data/raw/italy/11060_UNIPD_task_2.3_clima_1.1.1/11060.txt",
+                                     delim = "\t")  %>%
+  mutate(date = str_extract(date, "^.{10}"),
+         date = dmy(date)) %>%
+  # special actions
+  mutate(humidity = as.numeric(NA)) %>%
+  mutate(wind = as.numeric(NA)) %>%
+  mutate(country = "Italy")
+```
+
+## Romania
+```{r}
+romania_climate.in <- read_delim("../data/raw/romania/11600_Climate_T2.3_Romania_1.2.0/11600.txt",
+                                     delim = "\t")  %>%
+  mutate(date = str_extract(date, "^.{10}"),
+         date = dmy(date)) %>%
+  # special actions
+  mutate(sunshine = as.numeric(sunshine)) %>%
+  mutate(humidity = as.numeric(NA)) %>%
+  mutate(country = "Romania")
+```
+
+## Serbia
+```{r}
+serbia_climate.in <- read_delim("../data/raw/serbia/11100_Field_data_task_2.3__1.1.0/11100.txt",
+                                     delim = "\t")  %>%
+  mutate(date = str_extract(date, "^.{10}"),
+         date = dmy(date)) %>%
+  # special actions
+  mutate(humidity = as.numeric(NA)) %>%
+  mutate(country = "Serbia")
+```
+
+## Spain
+```{r}
+spain_climate.in <- read_delim("../data/raw/spain/11660_WP2_FieldData_climat_1.2.1/11660.txt",
+                                     delim = "\t")  %>%
+  mutate(date = str_extract(date, "^.{10}"),
+         date = dmy(date)) %>%
+  # special actions
+  mutate(sunshine = as.numeric(NA)) %>%
+  mutate(country = "Spain")
+```
+
+## Sweden
+```{r}
+sweden_climate.in <- read_delim("../data/raw/sweden/11540_WP_FieldData_Climate_1.2.0/11540.txt",
+                                     delim = "\t")  %>%
+  mutate(date = str_extract(date, "^.{10}"),
+         date = dmy(date)) %>%
+  # special actions
+  mutate(humidity = as.numeric(NA)) %>%
+  mutate(country = "Sweden")
+```
+
+## Switzerland
+```{r}
+switzerland_climate.in <- read_delim("../data/raw/switzerland/11480_WP2_FieldData_Climat_1.1.0/11480.txt",
+                                     delim = "\t")  %>%
+  mutate(date = str_extract(date, "^.{10}"),
+         date = dmy(date)) %>%
+  # special actions
+  mutate(humidity = as.numeric(NA)) %>%
+  mutate(country = "Switzerland")
+```
+
+## UK
+```{r}
+uk_climate.in <- read_delim("../data/raw/uk/wp2.3_climate_data_uk.csv",
+                                     delim = ",") %>%
+  mutate(date = str_extract(date, "^.{10}"),
+         date = dmy(date)) %>%
+  # special actions
+  mutate(humidity = as.numeric(NA)) %>%
+  mutate(country = "United Kingdom")
+```
+
+# Inspect
+```{r}
+comparison <- compare_df_cols(belgium_climate.in, 
+                estonia_climate.in,
+                france_climate.in,
+                germany_east_climate.in,
+                germany_west_climate.in,
+                hungary_climate.in,
+                italy_climate.in,
+                romania_climate.in,
+                serbia_climate.in,
+                spain_climate.in,
+                sweden_climate.in,
+                #uk_climate.in,
+                switzerland_climate.in)
+```
+
+# Combine and save
+```{r}
+climate.out <- bind_rows(belgium_climate.in,
+                        estonia_climate.in,
+                        france_climate.in,
+                        germany_east_climate.in,
+                        germany_west_climate.in,
+                        hungary_climate.in,
+                        italy_climate.in,
+                        romania_climate.in,
+                        serbia_climate.in,
+                        spain_climate.in,
+                        sweden_climate.in,
+                        uk_climate.in,
+                        switzerland_climate.in) %>%
+  rename(site = SiteID) %>%
+  replace_with_na_all(condition = ~.x == -999999)
+
+write_rds(climate.out, "../data/processed/climate.rds")
+```
